@@ -12,6 +12,7 @@ import java.awt.event.InputEvent;
 import java.awt.event.KeyEvent;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.regex.Pattern;
 
 import static org.example.boykisserai.ui.DashboardGuiFrame.*;
 
@@ -25,11 +26,19 @@ public class ChannelsPanel extends JPanel {
     private final JTextArea twitchChatArea = new JTextArea();
     private final JTextArea impactChatArea = new JTextArea();
 
-    // МНОГОСТРОЧНОЕ ПОЛЕ ВВОДА (КАК В DISCORD / TELEGRAM)
+    // МНОГОСТРОЧНОЕ ПОЛЕ ВВОДА
     private final JTextArea chatInputField = new JTextArea(2, 20);
     private final JButton btnSend = new JButton("Отправить");
 
     private int lastLogCount = 0;
+
+    // Авто-исправление слов без дефиса (для клавиатур без клавиши дефиса)
+    private static final Pattern HYPHEN_AUTOFIX_PATTERN = Pattern.compile(
+            "(?iu)\\b(кто|что|кем|чем|кому|чему|кого|чего|как|где|куда|откуда|когда|почему|зачем|какой|какая|какое|какие|каком|каких|каким)(то|либо|нибудь)\\b"
+    );
+    private static final Pattern KOE_AUTOFIX_PATTERN = Pattern.compile(
+            "(?iu)\\bкое(кто|что|кого|чего|кому|чему|кем|чем|как|где|куда)\\b"
+    );
 
     public ChannelsPanel(DashboardStateService stateService, CharacterService characterService) {
         this.stateService = stateService;
@@ -73,7 +82,6 @@ public class ChannelsPanel extends JPanel {
         inputPanel.setBackground(BG_CARD);
         inputPanel.setBorder(new EmptyBorder(6, 0, 0, 0));
 
-        // Настройка многострочного поля ввода
         chatInputField.setFont(FONT_BODY);
         chatInputField.setLineWrap(true);
         chatInputField.setWrapStyleWord(true);
@@ -82,14 +90,13 @@ public class ChannelsPanel extends JPanel {
         chatInputField.setMargin(new Insets(6, 10, 6, 10));
         chatInputField.putClientProperty("JTextArea.placeholderText", "Напишите сообщение... (Enter — отправить, Shift+Enter — новая строка)");
 
-        // ================= НАСТРОЙКА SHIFT+ENTER И ENTER =================
-        // 1. Shift + Enter -> вставляет перенос строки \n
+        // 1. Shift + Enter -> вставляет перенос строки
         KeyStroke shiftEnter = KeyStroke.getKeyStroke(KeyEvent.VK_ENTER, InputEvent.SHIFT_DOWN_MASK);
-        chatInputField.getInputMap().put(shiftEnter, "insert-break");
+        chatInputField.getInputMap(JComponent.WHEN_FOCUSED).put(shiftEnter, "insert-break");
 
-        // 2. Обычный Enter -> отправляет сообщение в чат
+        // 2. Обычный Enter -> отправляет сообщение
         KeyStroke enter = KeyStroke.getKeyStroke(KeyEvent.VK_ENTER, 0);
-        chatInputField.getInputMap().put(enter, "send-message");
+        chatInputField.getInputMap(JComponent.WHEN_FOCUSED).put(enter, "send-message");
         chatInputField.getActionMap().put("send-message", new AbstractAction() {
             @Override
             public void actionPerformed(ActionEvent e) {
@@ -130,8 +137,11 @@ public class ChannelsPanel extends JPanel {
     }
 
     private void sendTextMessage() {
-        String text = chatInputField.getText().trim();
-        if (text.isEmpty()) return;
+        String rawText = chatInputField.getText().trim();
+        if (rawText.isEmpty()) return;
+
+        // Если на клавиатуре нет дефиса и написано слитно ("кемнибудь"), подставляем минус автоматически
+        String text = autoCorrectHyphens(rawText);
 
         chatInputField.setText("");
         btnSend.setEnabled(false);
@@ -139,15 +149,42 @@ public class ChannelsPanel extends JPanel {
         CompletableFuture.runAsync(() -> {
             try {
                 characterService.chat("mabuchi", "Мабучи", "LOCAL", text);
+            } catch (Exception e) {
+                e.printStackTrace();
             } finally {
-                SwingUtilities.invokeLater(() -> btnSend.setEnabled(true));
+                // Всегда возвращаем активность кнопке и фокус полю ввода
+                SwingUtilities.invokeLater(() -> {
+                    btnSend.setEnabled(true);
+                    chatInputField.requestFocusInWindow();
+                    refresh(); // Мгновенно обновляем окно чата
+                });
             }
         });
     }
 
+    /**
+     * Автоматически исправляет слова вроде "кемнибудь" -> "кем-нибудь",
+     * спасая ситуацию, когда на клавиатуре отсутствует физическая клавиша дефиса.
+     */
+    private String autoCorrectHyphens(String text) {
+        if (text == null || text.isEmpty()) return "";
+        String fixed = HYPHEN_AUTOFIX_PATTERN.matcher(text).replaceAll("$1-$2");
+        return KOE_AUTOFIX_PATTERN.matcher(fixed).replaceAll("кое-$1");
+    }
+
+    /**
+     * Безопасное вырезание эмодзи без сломанных regex-пересечений.
+     * Гарантированно оставляет любые виды минусов и дефисов:
+     * Обычный минус '-', длинное тире '—', короткое тире '–', математический минус '−'.
+     */
     private String cleanEmoji(String text) {
         if (text == null) return "";
-        return text.replaceAll("[\\p{So}\\p{Cn}\\uD83C-\\uDBFF\\uDC00-\\uDFFF]", "").trim();
+        return text
+                // Вырезаем суррогатные пары эмодзи (U+1F600 и т.д.)
+                .replaceAll("[\\uD83C-\\uDBFF][\\uDC00-\\uDFFF]", "")
+                // Вырезаем символы категории Other_Symbol, кроме всех видов минусов/тире
+                .replaceAll("[\\p{So}&&[^-–—−]]", "")
+                .trim();
     }
 
     public void refresh() {
@@ -194,10 +231,10 @@ public class ChannelsPanel extends JPanel {
             twitchChatArea.setCaretPosition(twitchChatArea.getDocument().getLength());
         }
 
+        // 4. Нейро-анализ
         StringBuilder sbImpact = new StringBuilder();
         for (var m : allMessages) {
             if ("SYSTEM".equalsIgnoreCase(m.platform())) {
-                // Служебные уведомления базы данных выводятся аккуратной плашкой:
                 sbImpact.append(String.format("[%s] 💾 БАЗА ДАННЫХ:\n   %s\n\n", m.timestamp(), m.text()));
             } else if (m.isAi()) {
                 sbImpact.append(String.format("[%s] Boykisser: \"%s\"\n", m.timestamp(), cleanEmoji(m.text())));
