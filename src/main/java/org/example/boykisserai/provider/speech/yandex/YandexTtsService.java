@@ -5,16 +5,12 @@ import org.example.boykisserai.config.AppProperties;
 import org.example.boykisserai.provider.speech.SpeechState;
 import org.example.boykisserai.provider.speech.TextToSpeechService;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
+import org.springframework.web.reactive.function.client.WebClient;
 
 import javax.sound.sampled.*;
 import java.io.ByteArrayInputStream;
-import java.net.URI;
-import java.net.URLEncoder;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
-import java.nio.charset.StandardCharsets;
 
 @Slf4j
 @Service
@@ -24,10 +20,13 @@ public class YandexTtsService implements TextToSpeechService {
     private static final int SAMPLE_RATE = 48000;
 
     private final AppProperties props;
-    private final HttpClient httpClient = HttpClient.newHttpClient();
+    private final WebClient webClient;
 
     public YandexTtsService(AppProperties props) {
         this.props = props;
+        this.webClient = WebClient.builder()
+                .baseUrl("https://tts.api.cloud.yandex.net")
+                .build();
     }
 
     @Override
@@ -48,43 +47,46 @@ public class YandexTtsService implements TextToSpeechService {
             SpeechState.isSpeaking = true;
             log.info("[YandexSpeechKit] Озвучка [{} | {} | shift: {}]...", voice, emotion, pitchShift);
 
-            String bodyParams = "text=" + URLEncoder.encode(cleanText, StandardCharsets.UTF_8)
-                    + "&lang=ru-RU"
-                    + "&voice=" + URLEncoder.encode(voice, StandardCharsets.UTF_8)
-                    + "&emotion=" + URLEncoder.encode(emotion, StandardCharsets.UTF_8)
-                    + "&speed=" + URLEncoder.encode(props.getYandex().getSpeed(), StandardCharsets.UTF_8)
-                    + "&format=lpcm"
-                    + "&sampleRateHertz=" + SAMPLE_RATE;
+            org.springframework.util.MultiValueMap<String, String> formData =
+                    new org.springframework.util.LinkedMultiValueMap<>();
+            formData.add("text", cleanText);
+            formData.add("lang", "ru-RU");
+            formData.add("voice", voice);
+            formData.add("emotion", emotion);
+            formData.add("speed", props.getYandex().getSpeed());
+            formData.add("format", "lpcm");
+            formData.add("sampleRateHertz", String.valueOf(SAMPLE_RATE));
 
-            HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create("https://tts.api.cloud.yandex.net/speech/v1/tts:synthesize"))
-                    .header("Content-Type", "application/x-www-form-urlencoded")
+            byte[] pcmData = webClient.post()
+                    .uri("/speech/v1/tts:synthesize")
                     .header("Authorization", "Api-Key " + props.getYandex().getApiKey())
-                    .POST(HttpRequest.BodyPublishers.ofString(bodyParams))
-                    .build();
+                    .contentType(MediaType.APPLICATION_FORM_URLENCODED)
+                    .bodyValue(formData)
+                    .retrieve()
+                    .bodyToMono(byte[].class)
+                    .block();
 
-            HttpResponse<byte[]> response = httpClient.send(request, HttpResponse.BodyHandlers.ofByteArray());
-
-            if (response.statusCode() == 200 && response.body().length > 0) {
-                byte[] pcmData = response.body();
-
+            if (pcmData != null && pcmData.length > 0) {
+                // Раньше я записывал сырой звук на диск, применял питч через файл, и только потом проигрывал,
+                // из-за двух обращений к диску и процесса питча задержка озвучки была ощутимой.
+                // Сейчас всё делается в памяти без создания файла и сразу проигрывается.
                 if (Math.abs(pitchShift) > 0.01) {
                     pcmData = applyPitchShiftInMemory(pcmData, pitchShift);
                 }
 
                 playPcmDirectly(pcmData);
             } else {
-                log.error("[YandexTTS Error 1] Код ошибки: {}", response.statusCode());
+                log.error("[YandexTTS Error] Пустой ответ от API");
             }
 
         } catch (Exception e) {
-            log.error("[YandexTTS Error 2] {}", e.getMessage(), e);
+            log.error("[YandexTTS Error] {}", e.getMessage(), e);
         } finally {
             SpeechState.isSpeaking = false;
         }
     }
 
-    //Тональность голоса кота
+
     private byte[] applyPitchShiftInMemory(byte[] pcmData, double shiftSteps) {
         double factor = Math.pow(2.0, shiftSteps / 12.0);
         int claimedRate = (int) Math.round(SAMPLE_RATE * factor);
@@ -127,9 +129,13 @@ public class YandexTtsService implements TextToSpeechService {
         return bytes;
     }
 
-    // Раньше я записывал сырой звук на диск, применял питч через файл, и только потом проигрывал,
-    // из-за двух обращений к диску и процесса питча задержка озвучки была ощутимой.
-    // Сейчас всё делается в памяти без создания файла и сразу проигрывается.
+    /**
+     * Раньше здесь оборачивали PCM в WAV-заголовок, писали на диск и заново
+     * читали через AudioSystem.getAudioInputStream (который сам детектит формат
+     * из заголовка). Формат нам и так известен заранее (16-bit PCM, mono, 48kHz),
+     * поэтому строим AudioInputStream прямо из массива байт в памяти — без
+     * файла, без WAV-заголовка, без повторного чтения с диска.
+     */
     private void playPcmDirectly(byte[] pcmData) {
         AudioFormat format = new AudioFormat(SAMPLE_RATE, 16, 1, true, false);
         try (AudioInputStream ais = new AudioInputStream(
@@ -147,7 +153,7 @@ public class YandexTtsService implements TextToSpeechService {
             line.drain();
             line.stop();
         } catch (Exception e) {
-            log.error("[YandexTTS Playback Error] {}", e.getMessage());
+            log.error("[YandexTTS Playback Error] {}", e.getMessage(), e);
         }
     }
 }

@@ -1,20 +1,20 @@
 package org.example.boykisserai.provider.speech.openai;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.example.boykisserai.config.AppProperties;
 import org.example.boykisserai.provider.speech.SpeechState;
 import org.example.boykisserai.provider.speech.TextToSpeechService;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
+import org.springframework.web.reactive.function.client.WebClient;
 
-import javax.sound.sampled.*;
+import javax.sound.sampled.AudioFormat;
+import javax.sound.sampled.AudioInputStream;
+import javax.sound.sampled.AudioSystem;
+import javax.sound.sampled.SourceDataLine;
 import java.io.File;
-import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.Map;
 
@@ -24,11 +24,11 @@ import java.util.Map;
 public class OpenAiTtsService implements TextToSpeechService {
 
     private final AppProperties props;
-    private final HttpClient httpClient = HttpClient.newHttpClient();
-    private final ObjectMapper objectMapper = new ObjectMapper();
+    private final WebClient webClient;
 
     public OpenAiTtsService(AppProperties props) {
         this.props = props;
+        this.webClient = WebClient.builder().baseUrl(props.getOpenai().getBaseUrl()).build();
     }
 
     @Override
@@ -53,27 +53,27 @@ public class OpenAiTtsService implements TextToSpeechService {
                     "speed", props.getOpenai().getTtsSpeed()
             );
 
-            String jsonPayload = objectMapper.writeValueAsString(bodyMap);
+            // WebClient сам сериализует Map в JSON через Jackson — не нужно
+            // вручную вызывать objectMapper.writeValueAsString(...), как это
+            // требовалось при ручной сборке HttpRequest.
+            byte[] audioBytes = webClient.post()
+                    .uri("/v1/audio/speech")
+                    .header(HttpHeaders.AUTHORIZATION, "Bearer " + props.getOpenai().getApiKey())
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .bodyValue(bodyMap)
+                    .retrieve()
+                    .bodyToMono(byte[].class)
+                    .block();
 
-            HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(props.getOpenai().getBaseUrl() + "/v1/audio/speech"))
-                    .header("Authorization", "Bearer " + props.getOpenai().getApiKey())
-                    .header("Content-Type", "application/json")
-                    .POST(HttpRequest.BodyPublishers.ofString(jsonPayload, StandardCharsets.UTF_8))
-                    .build();
-
-            HttpResponse<byte[]> response = httpClient.send(request, HttpResponse.BodyHandlers.ofByteArray());
-
-            if (response.statusCode() == 200 && response.body().length > 0) {
-                Files.write(audioFile.toPath(), response.body());
+            if (audioBytes != null && audioBytes.length > 0) {
+                Files.write(audioFile.toPath(), audioBytes);
                 playWavAudioStream(audioFile);
             } else {
-                String errorBody = new String(response.body(), StandardCharsets.UTF_8);
-                log.error("[OpenAI TTS Error] Код: {}, Детали: {}", response.statusCode(), errorBody);
+                log.error("[OpenAI TTS Error] Пустой ответ от API");
             }
 
         } catch (Exception e) {
-            log.error("[OpenAI TTS Error] {}", e.getMessage());
+            log.error("[OpenAI TTS Error] {}", e.getMessage(), e);
         } finally {
             SpeechState.isSpeaking = false;
         }
@@ -107,7 +107,7 @@ public class OpenAiTtsService implements TextToSpeechService {
                 line.stop();
             }
         } catch (Exception e) {
-            log.error("[OpenAI TTS Playback Error] Ошибка воспроизведения: {}", e.getMessage());
+            log.error("[OpenAI TTS Playback Error] Ошибка воспроизведения: {}", e.getMessage(), e);
         }
     }
 }
