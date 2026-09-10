@@ -7,6 +7,7 @@ import org.example.boykisserai.provider.speech.TextToSpeechService;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
+import org.springframework.web.reactive.function.client.ExchangeStrategies;
 import org.springframework.web.reactive.function.client.WebClient;
 
 import javax.sound.sampled.*;
@@ -19,6 +20,9 @@ public class YandexTtsService implements TextToSpeechService {
 
     private static final int SAMPLE_RATE = 48000;
 
+    //При переходе на WebClient не учёл максимальный размер аудиофайла из-за чего обрывалась речь
+    private static final int MAX_IN_MEMORY_SIZE = 20 * 1024 * 1024; // 20 MB
+
     private final AppProperties props;
     private final WebClient webClient;
 
@@ -26,6 +30,9 @@ public class YandexTtsService implements TextToSpeechService {
         this.props = props;
         this.webClient = WebClient.builder()
                 .baseUrl("https://tts.api.cloud.yandex.net")
+                .exchangeStrategies(ExchangeStrategies.builder()
+                        .codecs(configurer -> configurer.defaultCodecs().maxInMemorySize(MAX_IN_MEMORY_SIZE))
+                        .build())
                 .build();
     }
 
@@ -67,9 +74,6 @@ public class YandexTtsService implements TextToSpeechService {
                     .block();
 
             if (pcmData != null && pcmData.length > 0) {
-                // Раньше я записывал сырой звук на диск, применял питч через файл, и только потом проигрывал,
-                // из-за двух обращений к диску и процесса питча задержка озвучки была ощутимой.
-                // Сейчас всё делается в памяти без создания файла и сразу проигрывается.
                 if (Math.abs(pitchShift) > 0.01) {
                     pcmData = applyPitchShiftInMemory(pcmData, pitchShift);
                 }
@@ -85,7 +89,6 @@ public class YandexTtsService implements TextToSpeechService {
             SpeechState.isSpeaking = false;
         }
     }
-
 
     private byte[] applyPitchShiftInMemory(byte[] pcmData, double shiftSteps) {
         double factor = Math.pow(2.0, shiftSteps / 12.0);
@@ -129,13 +132,10 @@ public class YandexTtsService implements TextToSpeechService {
         return bytes;
     }
 
-    /**
-     * Раньше здесь оборачивали PCM в WAV-заголовок, писали на диск и заново
-     * читали через AudioSystem.getAudioInputStream (который сам детектит формат
-     * из заголовка). Формат нам и так известен заранее (16-bit PCM, mono, 48kHz),
-     * поэтому строим AudioInputStream прямо из массива байт в памяти — без
-     * файла, без WAV-заголовка, без повторного чтения с диска.
-     */
+
+    // Раньше я записывал сырой звук на диск, применял питч через файл, и только потом проигрывал,
+    // из-за двух обращений к диску и процесса питча задержка озвучки была ощутимой.
+    // Сейчас всё делается в памяти без создания файла и сразу проигрывается.
     private void playPcmDirectly(byte[] pcmData) {
         AudioFormat format = new AudioFormat(SAMPLE_RATE, 16, 1, true, false);
         try (AudioInputStream ais = new AudioInputStream(

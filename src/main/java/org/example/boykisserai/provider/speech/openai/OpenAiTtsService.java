@@ -8,6 +8,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
+import org.springframework.web.reactive.function.client.ExchangeStrategies;
 import org.springframework.web.reactive.function.client.WebClient;
 
 import javax.sound.sampled.AudioFormat;
@@ -26,9 +27,17 @@ public class OpenAiTtsService implements TextToSpeechService {
     private final AppProperties props;
     private final WebClient webClient;
 
+    //При переходе на WebClient не учёл максимальный размер аудиофайла из-за чего обрывалась речь
+    private static final int MAX_IN_MEMORY_SIZE = 20 * 1024 * 1024; // 20 MB
+
     public OpenAiTtsService(AppProperties props) {
         this.props = props;
-        this.webClient = WebClient.builder().baseUrl(props.getOpenai().getBaseUrl()).build();
+        this.webClient = WebClient.builder()
+                .baseUrl(props.getOpenai().getBaseUrl())
+                .exchangeStrategies(ExchangeStrategies.builder()
+                        .codecs(configurer -> configurer.defaultCodecs().maxInMemorySize(MAX_IN_MEMORY_SIZE))
+                        .build())
+                .build();
     }
 
     @Override
