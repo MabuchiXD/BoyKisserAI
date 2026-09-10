@@ -1,0 +1,46 @@
+# Maven
+target/
+*.class
+
+# Конфиг
+src/main/resources/application.yml
+src/main/resources/application-local.yml
+src/main/resources/application-secrets.yml
+.env
+
+# VTube Studio auth token
+vts_token.txt
+
+# Дампы исходников проекта
+context.txt
+full_project_code.txt
+
+# Docker volumes с данными БД (если создаются локально)
+pgdata/
+postgres-data/
+
+# Аудио-артефакты, которые сервисы пишут в рабочую директорию во время работы
+*.wav
+*.mp3
+
+# JVM crash-логи
+hs_err_pid*.log
+replay_pid*.log
+
+# IDE — IntelliJ
+.idea/
+*.iml
+*.iws
+*.ipr
+out/
+
+# IDE — VS Code
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Логи
+*.log
+logs/

@@ -1,0 +1,91 @@
+server:
+  port: 8085
+
+logging:
+  level:
+    root: INFO
+    org.example.boykisserai: INFO
+    net.dv8tion.jda: INFO
+    net.dv8tion.jda.api.audio: WARN
+    net.dv8tion.jda.internal.audio: WARN
+
+spring:
+  application:
+    name: BoyKisserAIVTuber
+  # База данных PostgreSQL (Docker)
+  datasource:
+    url: jdbc:postgresql://localhost:5433/vtuber_memory
+    username: postgres
+    password: ВСТАВЬ_ПАРОЛЬ_БД
+    driver-class-name: org.postgresql.Driver
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: false
+
+  # Кэш Redis (Docker)
+  data:
+    redis:
+      host: localhost
+      port: 6379
+
+app:
+  # =======================================================================
+  # 1. ПЕРЕКЛЮЧАТЕЛИ АКТИВНЫХ ПРОВАЙДЕРОВ
+  # =======================================================================
+  ai:
+    provider: "openai"          # "openai" (ChatGPT) ИЛИ "qwen" (Ollama)
+
+  stt:
+    provider: "openai"          # "openai" (Whisper API) ИЛИ "yandex"
+
+  tts:
+    provider: "yandex"          # "yandex" (SpeechKit) ИЛИ "openai" (TTS-1)
+
+  # =======================================================================
+  # 2. НАСТРОЙКИ СЕССИЙ И МИКРОФОНА
+  # =======================================================================
+  bot:
+    creator-discord-id: "ВСТАВЬ_СВОЙ_DISCORD_ID"
+    active-dialog-window-ms: 25000 # 25 секунд честного окна диалога
+
+  audio:
+    mic-gain: 2.3               # Цифровое усиление звука (+120%)
+    speech-threshold: 260.0     # Порог активации голоса
+    silence-timeout-ms: 450     # Тайм-аут тишины
+    preroll-buffer-count: 5     # Буфер пре-ролла (чанков)
+
+  # =======================================================================
+  # 3. ИНТЕГРАЦИИ СО СТРИМАМИ И СОЦСЕТЯМИ
+  # =======================================================================
+  twitch:
+    enabled: true
+    channel: "ВСТАВЬ_ИМЯ_СВОЕГО_TWITCH_КАНАЛА"
+    oauth-token: "ВСТАВЬ_TWITCH_OAUTH_ТОКЕН"
+
+  discord:
+    token: "ВСТАВЬ_DISCORD_ТОКЕН"
+
+  vts:
+    websocket-url: "ws://localhost:8001"
+
+  # =======================================================================
+  # 4. НАСТРОЙКИ НЕЙРОСЕТЕВЫХ СЕРВИСОВ (OPENAI / YANDEX / OLLAMA)
+  # =======================================================================
+  openai:
+    base-url: "https://api.openai.com"
+    model-name: "gpt-4o-mini"
+    api-key: "ВСТАВЬ_OPENAI_API_КЛЮЧ"
+    voice: "nova"
+    tts-speed: 1.05
+
+  yandex:
+    api-key: "ВСТАВЬ_YANDEX_API_КЛЮЧ"
+    voice: "jane"
+    emotion: "evil"
+    speed: "1.10"
+    pitch-shift: -0.8
+
+  ollama:
+    base-url: "http://localhost:11434"
+    model-name: "qwen2.5:7b"
