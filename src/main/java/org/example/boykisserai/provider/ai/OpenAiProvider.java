@@ -23,6 +23,9 @@ public class OpenAiProvider implements AiProvider {
     private final WebClient webClient;
     private final AppProperties props;
 
+
+    private static final int MAX_EMPTY_RETRIES = 1;
+
     public OpenAiProvider(AppProperties props) {
         this.props = props;
         this.webClient = WebClient.builder().baseUrl(props.getOpenai().getBaseUrl()).build();
@@ -41,28 +44,37 @@ public class OpenAiProvider implements AiProvider {
         messages.add(new Message("user", context.userMessage()));
 
         String model = props.getOpenai().getModelName();
-        // response_format=json_object подставляется только если context.expectJson() —
-        // FactExtractorService, например, использует этот же provider, но ждёт
-        // обычный текст, а не JSON, поэтому явно передаёт false.
         OpenAiChatRequest request = new OpenAiChatRequest(model, messages, 0.7, context.expectJson());
 
-        log.info("Отправка запроса в OpenAI ({}) для пользователя...", model);
+        String content = null;
 
-        try {
-            OpenAiChatResponse response = webClient.post()
-                    .uri("/v1/chat/completions")
-                    .header(HttpHeaders.AUTHORIZATION, "Bearer " + props.getOpenai().getApiKey())
-                    .bodyValue(request)
-                    .retrieve()
-                    .bodyToMono(OpenAiChatResponse.class)
-                    .block();
+        for (int attempt = 0; attempt <= MAX_EMPTY_RETRIES; attempt++) {
+            if (attempt == 0) {
+                log.info("Отправка запроса в OpenAI ({}) для пользователя...", model);
+            } else {
+                log.warn("Модель вернула пустой ответ, повторная попытка ({}/{})...", attempt, MAX_EMPTY_RETRIES);
+            }
 
-            if (response != null && response.choices() != null && !response.choices().isEmpty()) {
-                String content = response.choices().get(0).message().content();
+            try {
+                OpenAiChatResponse response = webClient.post()
+                        .uri("/v1/chat/completions")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + props.getOpenai().getApiKey())
+                        .bodyValue(request)
+                        .retrieve()
+                        .bodyToMono(OpenAiChatResponse.class)
+                        .block();
+
+                if (response != null && response.choices() != null && !response.choices().isEmpty()) {
+                    content = response.choices().get(0).message().content();
+                }
+            } catch (Exception e) {
+                log.error("Ошибка получения ответа от OpenAI: {}", e.getMessage(), e);
+                break; // сетевая/API-ошибка — retry тут не поможет, сразу уходим в fallback
+            }
+
+            if (content != null && !content.isBlank()) {
                 return new ChatResponse(content);
             }
-        } catch (Exception e) {
-            log.error("Ошибка получения ответа от OpenAI: {}", e.getMessage(), e);
         }
 
         return new ChatResponse(context.expectJson()
